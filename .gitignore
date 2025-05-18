@@ -1,0 +1,50 @@
+# env / secrets
+.env
+.env.local
+*.env
+
+# python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.venv/
+venv/
+env/
+
+# data / models / runs
+data/raw/
+data/processed/
+data/cache/
+checkpoints/
+wandb/
+runs/
+*.pt
+*.pth
+*.onnx
+*.mlmodel
+*.mlpackage
+*.tflite
+
+# jupyter
+.ipynb_checkpoints/
+
+# os
+.DS_Store
+Thumbs.db
+
+# editors
+.vscode/
+.idea/
+*.swp
