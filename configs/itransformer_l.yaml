@@ -1,0 +1,9 @@
+defaults: base.yaml
+
+model:
+  name: itransformer
+  d_model: 256
+  n_heads: 8
+  n_layers: 6
+  d_ff: 1024
+  dropout: 0.15

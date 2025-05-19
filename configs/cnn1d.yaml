@@ -1,0 +1,7 @@
+defaults: base.yaml
+
+model:
+  name: cnn1d
+  channels: [32, 64, 128, 128]
+  kernel: 7
+  dropout: 0.1

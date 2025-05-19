@@ -1,0 +1,10 @@
+defaults: base.yaml
+
+model:
+  name: transformer_t
+  patch_size: 25       # T=500 → 20 tokens
+  d_model: 128
+  n_heads: 4
+  n_layers: 4
+  d_ff: 512
+  dropout: 0.1

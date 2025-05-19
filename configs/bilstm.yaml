@@ -1,0 +1,7 @@
+defaults: base.yaml
+
+model:
+  name: bilstm
+  hidden: 64
+  n_layers: 2
+  dropout: 0.2

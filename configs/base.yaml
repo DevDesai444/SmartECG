@@ -1,0 +1,36 @@
+# shared defaults; per-model configs inherit and override
+seed: 42
+
+data:
+  root: ${oc.env:PTBXL_DATA_DIR,./data/raw/ptbxl}
+  cache: ./data/cache
+  sampling_rate: 100        # 100 = records100/, 500 = records500/
+  input_seconds: 5
+  forecast_seconds: 5
+  label_threshold: 50       # scp_codes likelihood >= 50 → positive
+  num_workers: 4
+  batch_size: 64
+
+splits:
+  train_folds: [1, 2, 3, 4, 5, 6, 7, 8]
+  val_folds: [9]
+  test_folds: [10]
+
+train:
+  epochs: 30
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  warmup_ratio: 0.05
+  amp: true
+  grad_clip: 1.0
+  loss_alpha: 1.0   # MSE weight
+  loss_beta: 1.0    # BCE weight
+  early_stop_patience: 5
+  log_every: 50
+
+wandb:
+  project: smartecg
+  enabled: true
+
+classes: [normal, af, stemi, arrhythmia, conduction]
+num_leads: 12
