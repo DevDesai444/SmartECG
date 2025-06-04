@@ -1,4 +1,4 @@
-"""Dual heads shared across all models so the comparison is apples-to-apples.
+"""Dual heads shared across all models so the comparison is like-for-like.
 
 ForecastHead: project an encoded representation to a (12, T_out) waveform.
 ClassifyHead: project a pooled representation to 5 class logits.
