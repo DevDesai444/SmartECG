@@ -20,9 +20,16 @@ def test_stemi_codes_trigger_stemi_only():
     assert y[CLASSES.index("arrhythmia")] == 0.0
 
 
-def test_below_threshold_dropped():
-    y = codes_to_labels({"AFIB": 30.0}, threshold=50.0)
+def test_diagnostic_code_below_threshold_dropped():
+    # diagnostic codes (e.g. NORM, AMI) carry probabilistic likelihoods
+    y = codes_to_labels({"NORM": 30.0}, threshold=50.0)
     assert y.sum() == 0.0
+
+
+def test_rhythm_code_present_regardless_of_likelihood():
+    # rhythm codes are 0/100 binary annotations — presence = positive
+    y = codes_to_labels({"AFIB": 0.0}, threshold=50.0)
+    assert y[CLASSES.index("af")] == 1.0
 
 
 def test_multilabel_coexist():

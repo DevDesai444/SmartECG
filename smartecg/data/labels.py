@@ -19,17 +19,19 @@ NUM_CLASSES = len(CLASSES)
 NORMAL_CODES = {"NORM"}
 AF_CODES = {"AFIB", "AFLT"}
 STEMI_CODES = {
-    "AMI", "IMI", "ASMI", "ALMI", "ILMI", "PMI",
+    # diagnostic MI superclass codes (PTB-XL diagnostic_class == 'MI')
+    "AMI", "IMI", "ASMI", "ALMI", "ILMI", "PMI", "LMI", "IPMI", "IPLMI",
+    # subendocardial injury codes — same MI superclass
     "INJAS", "INJAL", "INJIN", "INJIL", "INJLA",
 }
 ARRHYTHMIA_CODES = {
     "SBRAD", "STACH", "SARRH", "PAC", "PVC", "BIGU", "TRIGU", "PACE",
-    "SVTAC", "SVARR",
+    "SVTAC", "SVARR", "PSVT",
 }
 CONDUCTION_CODES = {
     "1AVB", "2AVB", "3AVB",
     "CLBBB", "CRBBB", "ILBBB", "IRBBB",
-    "IVCD", "LAFB", "LPFB", "LBBB", "RBBB",
+    "IVCD", "LAFB", "LPFB",
     "WPW",
 }
 
@@ -40,6 +42,21 @@ CLASS_CODE_MAP = {
     3: ARRHYTHMIA_CODES,
     4: CONDUCTION_CODES,
 }
+
+# PTB-XL rhythm and form codes carry binary 0/100 likelihoods — 0.0 means the
+# annotator noted the code but didn't assign a confidence, not "absent". So
+# rhythm/form codes count as present whenever they appear in the dict.
+# Diagnostic codes carry probabilistic likelihoods (e.g., 15, 35, 50, 80, 100)
+# and require thresholding.
+RHYTHM_CODES = {
+    "SR", "AFIB", "STACH", "SARRH", "SBRAD", "PACE", "SVARR", "BIGU",
+    "AFLT", "SVTAC", "PSVT", "TRIGU",
+}
+FORM_CODES = {
+    "ABQRS", "PVC", "STD_", "VCLVH", "QWAVE", "LOWT", "NT_", "PAC", "LPR",
+    "INVT", "LVOLT", "HVOLT", "TAB_", "STE_", "PRC(S)",
+}
+NONDIAG_CODES = RHYTHM_CODES | FORM_CODES
 
 
 def parse_scp(s):
@@ -55,11 +72,21 @@ def parse_scp(s):
 
 
 def codes_to_labels(scp: dict, threshold: float = 50.0) -> np.ndarray:
-    """Map a {code: likelihood} dict to a 5-dim binary vector."""
+    """Map a {code: likelihood} dict to a 5-dim binary vector.
+
+    Hybrid rule: diagnostic codes require likelihood >= threshold; rhythm and
+    form codes count as present whenever they appear (their 0/100 likelihood
+    is a binary annotation marker, not a confidence).
+    """
     y = np.zeros(NUM_CLASSES, dtype=np.float32)
     if not scp:
         return y
-    active = {c for c, lk in scp.items() if (lk is None or lk >= threshold)}
+    active = set()
+    for c, lk in scp.items():
+        if c in NONDIAG_CODES:
+            active.add(c)
+        elif lk is None or lk >= threshold:
+            active.add(c)
     for ci, codeset in CLASS_CODE_MAP.items():
         if active & codeset:
             y[ci] = 1.0
