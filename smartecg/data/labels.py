@@ -106,3 +106,14 @@ def build_label_table(ptbxl_csv_path, threshold=50.0) -> pd.DataFrame:
         *[f"y_{n}" for n in CLASSES],
     ]
     return df[keep].reset_index()
+
+
+def filter_to_available(df: pd.DataFrame, root, sampling_rate: int = 100) -> pd.DataFrame:
+    """Drop rows whose .dat files aren't on disk — useful when training on a
+    partial download.
+    """
+    from pathlib import Path
+    root = Path(root)
+    col = "filename_lr" if sampling_rate == 100 else "filename_hr"
+    exists = df[col].apply(lambda f: (root / f).with_suffix(".dat").exists())
+    return df.loc[exists].reset_index(drop=True)

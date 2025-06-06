@@ -22,6 +22,12 @@ def _specificity(y_true, y_pred):
 def classification_metrics(y_true_lab, y_score_lab, classes, threshold=0.5):
     """y_*: (M, C) numpy arrays. Returns nested dict {class: {metric: val}, ...}."""
     out = {}
+    # Defensive: NaN in scores happens if a training step blew up the model.
+    # We replace with 0.5 so eval at least returns numbers instead of crashing.
+    if not np.isfinite(y_score_lab).all():
+        n_bad = (~np.isfinite(y_score_lab)).sum()
+        print(f"[metrics] warning: {n_bad} non-finite values in y_score; replacing with 0.5")
+        y_score_lab = np.where(np.isfinite(y_score_lab), y_score_lab, 0.5)
     y_pred_lab = (y_score_lab >= threshold).astype(np.float32)
     per_class_auroc = []
     per_class_f1 = []

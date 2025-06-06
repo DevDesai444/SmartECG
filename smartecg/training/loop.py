@@ -35,6 +35,11 @@ def train_one_epoch(model, loader, optim, sched, device, cfg, scaler, step, wand
             forecast, logits = model(x_in)
             loss, parts = joint_loss(forecast, logits, y_wave, y_lab, alpha, beta)
 
+        if not torch.isfinite(loss):
+            print(f"[warn] non-finite loss at step {step}: "
+                  f"mse={parts['mse'].item():.3g} bce={parts['bce'].item():.3g}; skipping batch")
+            continue
+
         if amp:
             scaler.scale(loss).backward()
             scaler.unscale_(optim)
@@ -43,7 +48,11 @@ def train_one_epoch(model, loader, optim, sched, device, cfg, scaler, step, wand
             scaler.update()
         else:
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            gn = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            if not torch.isfinite(gn):
+                print(f"[warn] non-finite grad norm at step {step}: {gn}; zeroing grads")
+                optim.zero_grad(set_to_none=True)
+                continue
             optim.step()
 
         if sched is not None:
