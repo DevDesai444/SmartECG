@@ -109,11 +109,13 @@ def build_label_table(ptbxl_csv_path, threshold=50.0) -> pd.DataFrame:
 
 
 def filter_to_available(df: pd.DataFrame, root, sampling_rate: int = 100) -> pd.DataFrame:
-    """Drop rows whose .dat files aren't on disk — useful when training on a
-    partial download.
-    """
+    """Drop rows whose .dat OR .hea files aren't on disk — useful when training
+    on a partial download (wfdb needs both)."""
     from pathlib import Path
     root = Path(root)
     col = "filename_lr" if sampling_rate == 100 else "filename_hr"
-    exists = df[col].apply(lambda f: (root / f).with_suffix(".dat").exists())
+    def both(f):
+        base = root / f
+        return base.with_suffix(".dat").exists() and base.with_suffix(".hea").exists()
+    exists = df[col].apply(both)
     return df.loc[exists].reset_index(drop=True)
