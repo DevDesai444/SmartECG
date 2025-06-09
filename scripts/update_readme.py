@@ -134,11 +134,11 @@ def main():
         r = load_run(variant)
         p = count_params(variant)
         if r is None:
-            abl_rows.append(f"| {label} | — | — | — | {fmt_params(p)} |")
+            abl_rows.append(f"| {label} | — | — | — | {fmt_params(p)} |\n")
         else:
             abl_rows.append(
                 f"| {label} | {fmt(r['macro_auroc'])} | {fmt(r['macro_f1'])} | "
-                f"{fmt(r['forecast_mse'])} | {fmt_params(p)} |"
+                f"{fmt(r['forecast_mse'])} | {fmt_params(p)} |\n"
             )
     abl_hdr = "| Variant | Val/Test AUROC | F1 | Forecast MSE | Params |\n|---|---|---|---|---|\n"
 

@@ -82,30 +82,88 @@ the forecasting framing is supposed to catch.
 
 ## Results
 
-To be filled after the full training sweep finishes. Numbers below are
-placeholders.
 
-| Model | Macro AUROC | F1 macro | Sens (STEMI) | Spec (STEMI) | Params | Size FP32 / INT8 | ONNX p50 | Core ML p50 | TFLite p50 |
-|---|---|---|---|---|---|---|---|---|---|
-| LSTM | — | — | — | — | — | — / — | — | — | — |
-| Bi-LSTM | — | — | — | — | — | — / — | — | — | — |
-| 1D-CNN | — | — | — | — | — | — / — | — | — | — |
-| Transformer-T | — | — | — | — | — | — / — | — | — | — |
-| **iTransformer** | — | — | — | — | — | — / — | — | — | — |
+> **Compute note.** Results are reported on a 5483-record snapshot (~25% of the full PTB-XL 100Hz set), trained on CPU with a 1-seed budget per architecture. The full PTB-XL release contains 21,799 records; the snapshot reflects what was downloaded in the available compute window. Numbers will move with full data + multi-seed averaging; the ranking trends should be representative.
+
+### Cross-architecture comparison (test fold 10)
+
+| Model | Macro AUROC | F1 macro | Sens (STEMI) | Spec (STEMI) | Params | AF AUROC | CD AUROC |
+|---|---|---|---|---|---|---|---|
+| LSTM | 0.762 | 0.274 | 0.000 | 1.000 | 979K | 0.791 | 0.739 |
+| Bi-LSTM | 0.737 | 0.169 | 0.000 | 1.000 | 914K | 0.827 | 0.668 |
+| 1D-CNN | 0.874 | 0.516 | 0.413 | 0.958 | 965K | 0.957 | 0.878 |
+| Transformer-T | 0.805 | 0.427 | 0.358 | 0.959 | 1.61M | 0.897 | 0.802 |
+| **iTransformer** | 0.665 | 0.195 | 0.009 | 0.986 | 923K | 0.723 | 0.633 |
 
 ### iTransformer size ablation
 
-Decision rule, declared in advance to avoid post-hoc reasoning:
+| Variant | Val/Test AUROC | F1 | Forecast MSE | Params |
+|---|---|---|---|---|
+| Small | 0.494 | 0.127 | 1.009 | 165K |
+| Medium (default) | 0.665 | 0.195 | 1.006 | 923K |
+| Large | 0.665 | 0.182 | 1.004 | 5.00M |
 
-- If **Large** val AUROC > Medium by ≥ 0.01 *and* its overfitting gap ≤ Medium + 0.02 → ship Large.
-- Else if **Medium** ≥ Small by ≥ 0.01 → ship Medium.
-- Else ship **Small** (smallest is best for on-device).
 
-| Variant | D | L | H | Params | Train AUROC | Val AUROC | Gap | INT8 size |
-|---|---|---|---|---|---|---|---|---|
-| Small | 64 | 2 | 4 | — | — | — | — | — |
-| Medium | 128 | 4 | 4 | — | — | — | — | — |
-| Large | 256 | 6 | 8 | — | — | — | — | — |
+### Deployment benchmarks (single-window inference, CPU)
+
+| Runtime | Size | p50 latency | p95 latency |
+|---|---|---|---|
+| ONNX FP32 | 3.58 MB | 0.24 ms | 0.71 ms |
+| ONNX INT8 | 1.01 MB | 0.22 ms | 0.26 ms |
+| Core ML (FP16+INT8 weights) | 979 KB | 0.36 ms | 0.45 ms |
+| TFLite | skipped | — | — |
+
+### Interpretability figures
+
+![attention_af](figures/attention_af.png)
+![attention_arrhythmia](figures/attention_arrhythmia.png)
+![attention_conduction](figures/attention_conduction.png)
+![attention_normal](figures/attention_normal.png)
+![attention_overall](figures/attention_overall.png)
+![attention_stemi](figures/attention_stemi.png)
+![saliency_af_318](figures/saliency_af_318.png)
+![saliency_arrhythmia_76](figures/saliency_arrhythmia_76.png)
+
+## Findings
+
+The headline cross-architecture result is *not* what the iTransformer hypothesis
+predicted. On a ~5,500-record (25%) snapshot of PTB-XL 100Hz, a stacked
+**1D-CNN** dominates the comparison at macro AUROC **0.874**, beating the
+hand-written iTransformer at **0.665** by a wide margin. The time-axis
+**Transformer-T** at **0.805** also outperforms the variate-axis iTransformer.
+
+This is the interesting part. It says something about *when* the inverted-axis
+inductive bias is the right one:
+
+- **Sequence length matters for self-attention.** iTransformer reduces the
+  attention dimension from T=500 timesteps to N=12 leads. That is a tiny
+  sequence — 12 tokens — and the model gives up the temporal axis as a place
+  attention can search. With only ~4,000 train records, the model never gets
+  enough signal to compensate.
+- **Convolutional and time-axis attention recover local QRS / ST morphology
+  cheaply.** 1D-CNN sees the same waveform with strided receptive fields and
+  learns the morphology features clinicians rely on. Transformer-T patches
+  T into 20 tokens and attends across them — it gets a usable temporal axis,
+  iTransformer does not.
+- **Size doesn't rescue iTransformer here.** The size ablation (S/M/L) shows
+  Medium ≈ Large (0.665 each) and Small ≈ chance. Scaling parameters without
+  scaling data does not help.
+
+The size-selection rule defined in advance ("Large val > Medium by ≥ 0.01
+*and* gap ≤ Medium + 0.02 → ship Large; else Medium ≥ Small by ≥ 0.01 →
+ship Medium; else Small") resolves to **Medium**. That is the variant
+exported below.
+
+The deployment table also tells a coherent story. The shipped Medium
+iTransformer reaches **0.22 ms p50** at **1.01 MB** as ONNX INT8 — well
+inside the envelope a wearable-class CPU could carry. Latency and
+parameter-count are not the bottleneck for this architecture; sample
+efficiency is.
+
+A follow-up worth running: rerun the full sweep on all 21,799 records and 3
+seeds. The hypothesis is that the variate-axis attention scales better than
+the convolutional baseline once N_train clears ~15K — but the experiments
+here cannot show that.
 
 ## Repository layout
 

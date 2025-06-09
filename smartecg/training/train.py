@@ -103,7 +103,7 @@ def main():
     else:
         device = torch.device("cpu")
         cfg["data"]["batch_size"] = cfg["data"].get("batch_size_cpu", 16)
-        cfg["data"]["num_workers"] = 2
+        cfg["data"]["num_workers"] = 0  # 0 is faster on macOS in our caching setup
     print(f"device: {device}, batch_size: {cfg['data']['batch_size']}")
 
     tr, va, te = get_loaders(cfg, max_records=args.max_records)
@@ -134,7 +134,10 @@ def main():
     best_auroc = -1.0
     bad_epochs = 0
     step = 0
-    ckpt_dir = Path("checkpoints") / cfg["model"]["name"]
+    # Output dir includes the config stem so size-ablation variants don't
+    # collide with the default model run.
+    cfg_stem = Path(args.config).stem
+    ckpt_dir = Path("checkpoints") / cfg_stem
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     for epoch in range(cfg["train"]["epochs"]):
@@ -183,7 +186,7 @@ def main():
             if isinstance(meta, dict) and "ecg_id" in meta:
                 eids.append(np.asarray(meta["ecg_id"]))
     if yt:
-        runs_dir = Path("runs") / cfg["model"]["name"]
+        runs_dir = Path("runs") / cfg_stem
         runs_dir.mkdir(parents=True, exist_ok=True)
         np.savez(
             runs_dir / "test_predictions.npz",
