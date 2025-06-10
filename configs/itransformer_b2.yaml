@@ -1,0 +1,7 @@
+defaults: itransformer.yaml
+
+# loss rebalance: classifier was being drowned by 6000-dim MSE.
+# alpha down, beta up so BCE drives encoder updates.
+train:
+  loss_alpha: 0.05
+  loss_beta: 2.0

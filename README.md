@@ -64,6 +64,8 @@ Joint loss:
 L = α · MSE(forecast, y_wave) + β · BCE_with_logits(logits, y_lab)
 ```
 
+The default α, β are now **0.05 / 2.0** — see the note in the Findings section.
+
 ## Targets
 
 Multi-label, mapped from PTB-XL's SCP-ECG statements at likelihood ≥ 50:
@@ -93,16 +95,23 @@ the forecasting framing is supposed to catch.
 | Bi-LSTM | 0.737 | 0.169 | 0.000 | 1.000 | 914K | 0.827 | 0.668 |
 | 1D-CNN | 0.874 | 0.516 | 0.413 | 0.958 | 965K | 0.957 | 0.878 |
 | Transformer-T | 0.805 | 0.427 | 0.358 | 0.959 | 1.61M | 0.897 | 0.802 |
-| **iTransformer** | 0.665 | 0.195 | 0.009 | 0.986 | 923K | 0.723 | 0.633 |
+| **iTransformer** | 0.672 | 0.260 | 0.037 | 0.974 | 923K | 0.696 | 0.637 |
+
+The iTransformer row reflects the **α=0.05, β=2.0** joint-loss rebalance
+(see Findings below). The pre-rebalance numbers were macro 0.665 / STEMI
+sens 0.009 — the rebalance lifted STEMI sensitivity ~4× and macro F1 from
+0.195 to 0.260 without changing any architectural code.
 
 ### iTransformer size ablation
 
 | Variant | Val/Test AUROC | F1 | Forecast MSE | Params |
 |---|---|---|---|---|
 | Small | 0.494 | 0.127 | 1.009 | 165K |
-| Medium (default) | 0.665 | 0.195 | 1.006 | 923K |
+| Medium (default) | 0.672 | 0.260 | 1.036 | 923K |
 | Large | 0.665 | 0.182 | 1.004 | 5.00M |
 
+Small/Large are the pre-rebalance runs and are kept as a reference point for
+the loss-balance effect; Medium is the rebalanced (current) checkpoint.
 
 ### Deployment benchmarks (single-window inference, CPU)
 
@@ -129,7 +138,7 @@ the forecasting framing is supposed to catch.
 The headline cross-architecture result is *not* what the iTransformer hypothesis
 predicted. On a ~5,500-record (25%) snapshot of PTB-XL 100Hz, a stacked
 **1D-CNN** dominates the comparison at macro AUROC **0.874**, beating the
-hand-written iTransformer at **0.665** by a wide margin. The time-axis
+hand-written iTransformer at **0.672** by a wide margin. The time-axis
 **Transformer-T** at **0.805** also outperforms the variate-axis iTransformer.
 
 This is the interesting part. It says something about *when* the inverted-axis
@@ -146,12 +155,46 @@ inductive bias is the right one:
   T into 20 tokens and attends across them — it gets a usable temporal axis,
   iTransformer does not.
 - **Size doesn't rescue iTransformer here.** The size ablation (S/M/L) shows
-  Medium ≈ Large (0.665 each) and Small ≈ chance. Scaling parameters without
-  scaling data does not help.
+  Medium ≈ Large and Small ≈ chance. Scaling parameters without scaling data
+  does not help.
+
+### What changed: joint-loss rebalance (α=0.05, β=2.0)
+
+The first complete training pass shipped with α=β=1.0 — the symmetric default.
+Two probes on that checkpoint pointed at one mechanism:
+
+1. **Attention entropy collapsed to uniform in deeper layers.** Per-layer mean
+   entropy on 128 val samples (max = log(12) ≈ 2.485): layer 0 = 2.26,
+   layer 1 = 2.32, layer 2 = 2.45, layer 3 = 2.47. The deepest blocks were
+   averaging across all 12 leads — the variate axis was being wasted.
+2. **The MSE gradient drowned the BCE one.** MSE backprops through 12 × 500
+   = 6,000 forecast values per sample; BCE through 5 logits. Even with
+   comparable scalar magnitudes (~1.0 vs ~0.4), the encoder's path of least
+   resistance is "produce a lead-agnostic representation that reconstructs
+   each lead from a global mean" — which is exactly what uniform attention
+   gives you. STEMI sensitivity went to 0.009 because the classifier head
+   was effectively ignored.
+
+Setting **α=0.05, β=2.0** shifts the joint-loss contribution from
+roughly (1.011, 0.430) to (0.051, 0.860) — a ~17× re-weighting toward
+classification. After 8 epochs with this rebalance:
+
+- macro AUROC: 0.665 → **0.672**
+- STEMI sensitivity: 0.009 → **0.037** (4×, off a low base)
+- macro F1: 0.195 → **0.260**
+- layer-3 attention entropy: 2.47 → **2.21** (uniform collapse gone)
+- per-class AUROC: normal 0.728, af 0.696, stemi 0.656, arrhythmia 0.642,
+  conduction 0.637
+
+A follow-up with heavier regularization (dropout 0.3, wd 5e-4, lr 1e-4,
+12 epochs) actually *underperformed* at 0.640 — the encoder was already
+near the data-size ceiling, so slowing the fit didn't buy anything. That
+result is what flagged the remaining gap as a sample-efficiency problem,
+not a regularization problem.
 
 The size-selection rule defined in advance ("Large val > Medium by ≥ 0.01
 *and* gap ≤ Medium + 0.02 → ship Large; else Medium ≥ Small by ≥ 0.01 →
-ship Medium; else Small") resolves to **Medium**. That is the variant
+ship Medium; else Small") still resolves to **Medium**. That is the variant
 exported below.
 
 The deployment table also tells a coherent story. The shipped Medium

@@ -1,0 +1,16 @@
+defaults: itransformer.yaml
+
+# b2 showed alpha=0.05/beta=2.0 fixes entropy collapse and STEMI sensitivity,
+# but the encoder overfits in 2-3 epochs on the 5,483-record snapshot.
+# b3 = b2 + heavier regularization (dropout up, wd up, lr down).
+
+model:
+  dropout: 0.3
+
+train:
+  loss_alpha: 0.05
+  loss_beta: 2.0
+  lr: 1.0e-4
+  weight_decay: 5.0e-4
+  warmup_ratio: 0.1
+  early_stop_patience: 8
