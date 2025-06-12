@@ -40,6 +40,9 @@ runs/
 # jupyter
 .ipynb_checkpoints/
 
+# pytest
+.pytest_cache/
+
 # os
 .DS_Store
 Thumbs.db
