@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 from torch.utils.data import DataLoader
 
 from smartecg.utils.config import load_config
-from smartecg.utils.seed import set_seed
+from smartecg.utils.seed import set_seed, make_torch_generator
 from smartecg.data.dataset import PTBXLDataset
 from smartecg.data.splits import split_indices
 from smartecg.data.labels import build_label_table, filter_to_available
@@ -23,7 +23,7 @@ from smartecg.models import build_model
 from smartecg.training.loop import train_one_epoch, evaluate
 
 
-def get_loaders(cfg, max_records=None):
+def get_loaders(cfg, max_records=None, train_generator=None):
     root = cfg["data"]["root"]
     df = build_label_table(Path(root) / "ptbxl_database.csv",
                            cfg["data"]["label_threshold"])
@@ -52,7 +52,8 @@ def get_loaders(cfg, max_records=None):
 
     bs = cfg["data"]["batch_size"]
     nw = cfg["data"]["num_workers"]
-    tr = DataLoader(_mk(tr_ids), batch_size=bs, shuffle=True, num_workers=nw, drop_last=True)
+    tr = DataLoader(_mk(tr_ids), batch_size=bs, shuffle=True, num_workers=nw,
+                    drop_last=True, generator=train_generator)
     va = DataLoader(_mk(va_ids), batch_size=bs, shuffle=False, num_workers=nw)
     te = DataLoader(_mk(te_ids), batch_size=bs, shuffle=False, num_workers=nw)
     return tr, va, te
@@ -79,14 +80,19 @@ def main():
     p.add_argument("--max-records", type=int, default=None,
                    help="subsample for smoke runs")
     p.add_argument("--tag", default="")
+    p.add_argument("--seed", type=int, default=None,
+                   help="override cfg.seed; output dir becomes seed_<N>/ subdir")
     args = p.parse_args()
 
     load_dotenv()  # reads .env (gitignored) for WANDB_API_KEY etc.
     cfg = load_config(args.config)
     if args.epochs is not None:
         cfg["train"]["epochs"] = args.epochs
+    if args.seed is not None:
+        cfg["seed"] = args.seed
 
     set_seed(cfg["seed"])
+    train_gen = make_torch_generator(cfg["seed"])
     # Device selection: CUDA → MPS → CPU. We fall back from MPS to CPU when
     # SMARTECG_FORCE_CPU=1 or when the user knows MPS is unstable for this code
     # (torch 2.3 has an attention NaN bug we've verified on Apple Silicon —
@@ -106,7 +112,8 @@ def main():
         cfg["data"]["num_workers"] = 0  # 0 is faster on macOS in our caching setup
     print(f"device: {device}, batch_size: {cfg['data']['batch_size']}")
 
-    tr, va, te = get_loaders(cfg, max_records=args.max_records)
+    tr, va, te = get_loaders(cfg, max_records=args.max_records,
+                              train_generator=train_gen)
     model = build_model(cfg).to(device)
 
     optim = torch.optim.AdamW(
@@ -124,20 +131,34 @@ def main():
     wandb_run = None
     if cfg["wandb"]["enabled"] and os.environ.get("WANDB_API_KEY"):
         import wandb
+        # name = model_tag_seedN if both given; else fall back gracefully
+        run_name_parts = [cfg["model"]["name"]]
+        if args.tag:
+            run_name_parts.append(args.tag)
+        if args.seed is not None:
+            run_name_parts.append(f"s{args.seed}")
+        run_name = "_".join(run_name_parts) if len(run_name_parts) > 1 else None
+        group = os.environ.get("WANDB_GROUP")
         wandb_run = wandb.init(
             project=os.environ.get("WANDB_PROJECT", cfg["wandb"]["project"]),
             entity=os.environ.get("WANDB_ENTITY") or None,
             config=cfg,
-            name=f"{cfg['model']['name']}_{args.tag}" if args.tag else None,
+            name=run_name,
+            group=group,
+            tags=[cfg["model"]["name"]] + ([args.tag] if args.tag else []),
         )
 
     best_auroc = -1.0
     bad_epochs = 0
     step = 0
     # Output dir includes the config stem so size-ablation variants don't
-    # collide with the default model run.
+    # collide with the default model run; when --seed is set, each seed gets
+    # its own subdir so 3-seed runs don't overwrite each other.
     cfg_stem = Path(args.config).stem
+    seed_sub = f"seed_{args.seed}" if args.seed is not None else None
     ckpt_dir = Path("checkpoints") / cfg_stem
+    if seed_sub:
+        ckpt_dir = ckpt_dir / seed_sub
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     for epoch in range(cfg["train"]["epochs"]):
@@ -187,6 +208,8 @@ def main():
                 eids.append(np.asarray(meta["ecg_id"]))
     if yt:
         runs_dir = Path("runs") / cfg_stem
+        if seed_sub:
+            runs_dir = runs_dir / seed_sub
         runs_dir.mkdir(parents=True, exist_ok=True)
         np.savez(
             runs_dir / "test_predictions.npz",
