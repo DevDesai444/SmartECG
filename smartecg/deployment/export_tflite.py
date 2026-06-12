@@ -21,15 +21,27 @@ def export(onnx_path: str, out_path: str, calibration_data=None):
         tf_rep.export_graph(str(sm))
 
         converter = tf.lite.TFLiteConverter.from_saved_model(str(sm))
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
         if calibration_data is not None:
+            converter.optimizations = [tf.lite.Optimize.DEFAULT]
             def rep_dataset():
                 for batch in calibration_data:
                     yield [batch]
             converter.representative_dataset = rep_dataset
-            converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
-            converter.inference_input_type = tf.int8
-            converter.inference_output_type = tf.int8
+            # GELU's Erf isn't in TFLITE_BUILTINS_INT8; allow SELECT_TF_OPS fallback for the
+            # GELU subgraph. The rest of the graph (matmul, ln, etc.) still quantizes to INT8.
+            converter.target_spec.supported_ops = [
+                tf.lite.OpsSet.TFLITE_BUILTINS_INT8,
+                tf.lite.OpsSet.SELECT_TF_OPS,
+            ]
+            # input/output left as float32 since SELECT_TF_OPS path doesn't enforce int8 i/o end-to-end.
+            converter.inference_input_type = tf.float32
+            converter.inference_output_type = tf.float32
+        else:
+            # GELU's Erf op isn't in TFLITE_BUILTINS; allow SELECT_TF_OPS fallback for FP32.
+            converter.target_spec.supported_ops = [
+                tf.lite.OpsSet.TFLITE_BUILTINS,
+                tf.lite.OpsSet.SELECT_TF_OPS,
+            ]
         tflite_bytes = converter.convert()
 
     Path(out_path).write_bytes(tflite_bytes)
