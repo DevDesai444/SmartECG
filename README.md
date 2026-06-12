@@ -64,7 +64,7 @@ Joint loss:
 L = α · MSE(forecast, y_wave) + β · BCE_with_logits(logits, y_lab)
 ```
 
-The default α, β are now **0.05 / 2.0** — see the note in the Findings section.
+The default α, β are **0.05 / 2.0**.
 
 ## Targets
 
@@ -82,131 +82,118 @@ STEMI is mapped to the specific MI / injury codes rather than the broad STTC
 superclass — that subset is the clinically actionable, time-critical signal
 the forecasting framing is supposed to catch.
 
+One record in PTB-XL `records100/` has lead V5 entirely zero in the raw
+source (`ecg_id 12722`); the model sees those samples as zeros.
+
 ## Results
 
+Full PTB-XL @ 100 Hz, joint loss α=0.05 / β=2.0, fold 10 test, 3 seeds
+(42, 1337, 2024). Cells below come from `runs/*/seeds.json` (mean ± std
+across seeds). Deployment columns are populated for the shipping iTransformer
+Medium only — the four baselines were not re-exported across runtimes.
 
-> **Compute note.** Results are reported on a 5483-record snapshot (~25% of the full PTB-XL 100Hz set), trained on CPU with a 1-seed budget per architecture. The full PTB-XL release contains 21,799 records; the snapshot reflects what was downloaded in the available compute window. Numbers will move with full data + multi-seed averaging; the ranking trends should be representative.
+### Cross-architecture comparison
 
-### Cross-architecture comparison (test fold 10)
-
-| Model | Macro AUROC | F1 macro | Sens (STEMI) | Spec (STEMI) | Params | AF AUROC | CD AUROC |
+| Architecture | Macro AUROC | F1 (macro) | STEMI sens | STEMI spec | AF AUROC | CD AUROC | Params |
 |---|---|---|---|---|---|---|---|
-| LSTM | 0.762 | 0.274 | 0.000 | 1.000 | 979K | 0.791 | 0.739 |
-| Bi-LSTM | 0.737 | 0.169 | 0.000 | 1.000 | 914K | 0.827 | 0.668 |
-| 1D-CNN | 0.874 | 0.516 | 0.413 | 0.958 | 965K | 0.957 | 0.878 |
-| Transformer-T | 0.805 | 0.427 | 0.358 | 0.959 | 1.61M | 0.897 | 0.802 |
-| **iTransformer** | 0.672 | 0.260 | 0.037 | 0.974 | 923K | 0.696 | 0.637 |
+| **iTransformer (M, ship)** | 0.748 ± 0.007 | 0.361 ± 0.022 | 0.169 ± 0.067 | 0.935 ± 0.040 | 0.779 ± 0.010 | 0.687 ± 0.008 | 922,617 |
+| 1D-CNN | 0.918 ± 0.001 | 0.724 ± 0.004 | 0.573 ± 0.006 | 0.962 ± 0.004 | 0.970 ± 0.003 | 0.921 ± 0.001 | 964,757 |
+| Transformer-T | 0.878 ± 0.002 | 0.620 ± 0.016 | 0.526 ± 0.040 | 0.943 ± 0.019 | 0.938 ± 0.002 | 0.883 ± 0.005 | 1,606,517 |
+| Bi-LSTM | 0.877 ± 0.016 | 0.552 ± 0.044 | 0.529 ± 0.028 | 0.952 ± 0.003 | 0.935 ± 0.027 | 0.884 ± 0.010 | 913,909 |
+| LSTM | 0.807 ± 0.007 | 0.396 ± 0.008 | 0.440 ± 0.022 | 0.942 ± 0.004 | 0.797 ± 0.013 | 0.830 ± 0.020 | 979,445 |
 
-The iTransformer row reflects the **α=0.05, β=2.0** joint-loss rebalance
-(see Findings below). The pre-rebalance numbers were macro 0.665 / STEMI
-sens 0.009 — the rebalance lifted STEMI sensitivity ~4× and macro F1 from
-0.195 to 0.260 without changing any architectural code.
+Live runs: https://wandb.ai/devdesai444/smartecg-v1
+
+Filter the workspace for `itransformer_s42` (group `smartecg-v1-fullsweep`) for a representative iTransformer Medium training curve.
 
 ### iTransformer size ablation
 
-| Variant | Val/Test AUROC | F1 | Forecast MSE | Params |
+| Variant | Params | Macro AUROC |
+|---|---|---|
+| Small | 164,985 | 0.7338 ± 0.0051 |
+| **Medium (ship)** | 922,617 | **0.7484 ± 0.0065** |
+| Large | 4,997,113 | 0.7579 ± 0.0036 |
+
+Selection rule (locked in advance): `AUROC(L) − AUROC(M) = +0.0095` is below
+the +0.01 threshold, so the Large branch short-circuits; `AUROC(M) − AUROC(S)
+= +0.0146` clears +0.01, ship Medium. Audit trail in `runs/size_ablation.md`.
+
+### Sampling rate
+
+| Sampling rate | Params | Macro AUROC | ONNX INT8 size | ONNX INT8 p50 (M1 CPU) |
 |---|---|---|---|---|
-| Small | 0.494 | 0.127 | 1.009 | 165K |
-| Medium (default) | 0.672 | 0.260 | 1.036 | 923K |
-| Large | 0.665 | 0.182 | 1.004 | 5.00M |
+| **100 Hz (ship)** | 922,617 | 0.7484 ± 0.0065 | 1.01 MB | 0.22 ms |
+| 500 Hz (audit) | 1,436,617 | 0.7553 ± 0.0043 | 1.50 MB | 0.24 ms |
 
-Small/Large are the pre-rebalance runs and are kept as a reference point for
-the loss-balance effect; Medium is the rebalanced (current) checkpoint.
+100 Hz is the deployment target; 500 Hz is the audit row. Audit trail in
+`runs/sampling_rate.md`.
 
-### Deployment benchmarks (single-window inference, CPU)
+### Per-lead forecast (iTransformer Medium, seed 42, test fold)
 
-| Runtime | Size | p50 latency | p95 latency |
-|---|---|---|---|
-| ONNX FP32 | 3.58 MB | 0.24 ms | 0.71 ms |
-| ONNX INT8 | 1.01 MB | 0.22 ms | 0.26 ms |
-| Core ML (FP16+INT8 weights) | 979 KB | 0.36 ms | 0.45 ms |
-| TFLite | skipped | — | — |
+Computed from `runs/itransformer/seed_42/test_predictions.npz` plus a
+single-pass re-inference of the forecast head. Forecast MSE averages 1.04
+across leads; the forecast head behaves as a regularizer for the classifier,
+not as a clinically usable next-5s waveform reconstruction.
+
+| Lead | MSE | MAE |
+|---|---|---|
+| I | 1.046 | 0.605 |
+| II | 1.038 | 0.629 |
+| III | 1.039 | 0.595 |
+| aVR | 1.052 | 0.622 |
+| aVL | 1.047 | 0.596 |
+| aVF | 1.037 | 0.620 |
+| V1 | 1.040 | 0.552 |
+| V2 | 1.035 | 0.589 |
+| V3 | 1.028 | 0.600 |
+| V4 | 1.033 | 0.573 |
+| V5 | 1.033 | 0.555 |
+| V6 | 1.033 | 0.561 |
+| **mean** | **1.038** | **0.592** |
+
+### Demographics breakdown (iTransformer Medium, seed 42)
+
+Per-class AUROC and F1 broken down by age bucket, sex, and recording site,
+computed from `runs/itransformer/seed_42/test_predictions.npz` joined to
+PTB-XL metadata. Cells with fewer than 30 positives for the class are
+rendered as `n<30`.
+
+![demographics](figures/demographics.png)
 
 ### Interpretability figures
 
+Averaged across 3 seeds (42, 1337, 2024) from the shipping Medium checkpoint.
+
+![attention_overall](figures/attention_overall.png)
+![attention_stemi](figures/attention_stemi.png)
+![attention_normal](figures/attention_normal.png)
 ![attention_af](figures/attention_af.png)
 ![attention_arrhythmia](figures/attention_arrhythmia.png)
 ![attention_conduction](figures/attention_conduction.png)
-![attention_normal](figures/attention_normal.png)
-![attention_overall](figures/attention_overall.png)
-![attention_stemi](figures/attention_stemi.png)
-![saliency_af_318](figures/saliency_af_318.png)
-![saliency_arrhythmia_76](figures/saliency_arrhythmia_76.png)
+![shap_lead_importance](figures/shap_lead_importance.png)
+![saliency_stemi](figures/saliency_stemi_10878.png)
+![saliency_normal](figures/saliency_normal_1697.png)
+![saliency_af](figures/saliency_af_20084.png)
+![saliency_arrhythmia](figures/saliency_arrhythmia_4960.png)
+![saliency_conduction](figures/saliency_conduction_20120.png)
 
-## Findings
+## Deployment
 
-The headline cross-architecture result is *not* what the iTransformer hypothesis
-predicted. On a ~5,500-record (25%) snapshot of PTB-XL 100Hz, a stacked
-**1D-CNN** dominates the comparison at macro AUROC **0.874**, beating the
-hand-written iTransformer at **0.672** by a wide margin. The time-axis
-**Transformer-T** at **0.805** also outperforms the variate-axis iTransformer.
+`runs/deployment.json`. M1 CPU, single-window inference, 100 iters with
+10-iter warmup. ONNX INT8 is the shipping target; Core ML and TFLite are
+sibling deployment paths covering Apple Neural Engine and Android NNAPI
+respectively.
 
-This is the interesting part. It says something about *when* the inverted-axis
-inductive bias is the right one:
+| Runtime | Size | p50 latency | p95 latency | Parity |
+|---|---|---|---|---|
+| ONNX FP32 | 3.58 MB | 0.24 ms | 0.71 ms | vs torch: 7.2e-7 logits, 4.8e-7 forecast |
+| ONNX INT8 | 1.01 MB | 0.22 ms | 0.26 ms | logits_max_err_vs_fp32 = 8.4e-3 |
+| Core ML (FP16 + INT8 weights) | 979 KB | 0.36 ms | 0.45 ms | weight-quantized |
+| TFLite FP32 | 4.60 MB | 0.69 ms | 1.87 ms | vs torch: 4.8e-7 logits, 6.6e-7 forecast |
+| TFLite INT8 | 0.98 MB | 0.89 ms | 1.48 ms | logits_max_err_vs_fp32 = 2.6e-2 |
 
-- **Sequence length matters for self-attention.** iTransformer reduces the
-  attention dimension from T=500 timesteps to N=12 leads. That is a tiny
-  sequence — 12 tokens — and the model gives up the temporal axis as a place
-  attention can search. With only ~4,000 train records, the model never gets
-  enough signal to compensate.
-- **Convolutional and time-axis attention recover local QRS / ST morphology
-  cheaply.** 1D-CNN sees the same waveform with strided receptive fields and
-  learns the morphology features clinicians rely on. Transformer-T patches
-  T into 20 tokens and attends across them — it gets a usable temporal axis,
-  iTransformer does not.
-- **Size doesn't rescue iTransformer here.** The size ablation (S/M/L) shows
-  Medium ≈ Large and Small ≈ chance. Scaling parameters without scaling data
-  does not help.
-
-### What changed: joint-loss rebalance (α=0.05, β=2.0)
-
-The first complete training pass shipped with α=β=1.0 — the symmetric default.
-Two probes on that checkpoint pointed at one mechanism:
-
-1. **Attention entropy collapsed to uniform in deeper layers.** Per-layer mean
-   entropy on 128 val samples (max = log(12) ≈ 2.485): layer 0 = 2.26,
-   layer 1 = 2.32, layer 2 = 2.45, layer 3 = 2.47. The deepest blocks were
-   averaging across all 12 leads — the variate axis was being wasted.
-2. **The MSE gradient drowned the BCE one.** MSE backprops through 12 × 500
-   = 6,000 forecast values per sample; BCE through 5 logits. Even with
-   comparable scalar magnitudes (~1.0 vs ~0.4), the encoder's path of least
-   resistance is "produce a lead-agnostic representation that reconstructs
-   each lead from a global mean" — which is exactly what uniform attention
-   gives you. STEMI sensitivity went to 0.009 because the classifier head
-   was effectively ignored.
-
-Setting **α=0.05, β=2.0** shifts the joint-loss contribution from
-roughly (1.011, 0.430) to (0.051, 0.860) — a ~17× re-weighting toward
-classification. After 8 epochs with this rebalance:
-
-- macro AUROC: 0.665 → **0.672**
-- STEMI sensitivity: 0.009 → **0.037** (4×, off a low base)
-- macro F1: 0.195 → **0.260**
-- layer-3 attention entropy: 2.47 → **2.21** (uniform collapse gone)
-- per-class AUROC: normal 0.728, af 0.696, stemi 0.656, arrhythmia 0.642,
-  conduction 0.637
-
-A follow-up with heavier regularization (dropout 0.3, wd 5e-4, lr 1e-4,
-12 epochs) actually *underperformed* at 0.640 — the encoder was already
-near the data-size ceiling, so slowing the fit didn't buy anything. That
-result is what flagged the remaining gap as a sample-efficiency problem,
-not a regularization problem.
-
-The size-selection rule defined in advance ("Large val > Medium by ≥ 0.01
-*and* gap ≤ Medium + 0.02 → ship Large; else Medium ≥ Small by ≥ 0.01 →
-ship Medium; else Small") still resolves to **Medium**. That is the variant
-exported below.
-
-The deployment table also tells a coherent story. The shipped Medium
-iTransformer reaches **0.22 ms p50** at **1.01 MB** as ONNX INT8 — well
-inside the envelope a wearable-class CPU could carry. Latency and
-parameter-count are not the bottleneck for this architecture; sample
-efficiency is.
-
-A follow-up worth running: rerun the full sweep on all 21,799 records and 3
-seeds. The hypothesis is that the variate-axis attention scales better than
-the convolutional baseline once N_train clears ~15K — but the experiments
-here cannot show that.
+500 Hz sibling benchmarks in `runs/deployment_500.json`: ONNX FP32 5.54 MB /
+0.29 ms p50, ONNX INT8 1.50 MB / 0.24 ms p50.
 
 ## Repository layout
 
@@ -253,7 +240,7 @@ bash scripts/benchmark_all.sh
 
 # interpretability dashboard
 streamlit run smartecg/interpretability/dashboard.py -- \
-    --predictions runs/itransformer/test_predictions.npz \
+    --predictions runs/itransformer/seed_42/test_predictions.npz \
     --metadata data/raw/ptbxl/ptbxl_database.csv
 ```
 
