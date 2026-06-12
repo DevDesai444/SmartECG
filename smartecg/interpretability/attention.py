@@ -48,6 +48,29 @@ def per_class_attention(attn: np.ndarray, labels: np.ndarray, classes: list[str]
     return out
 
 
+@torch.no_grad()
+def collect_attention_multi(checkpoints, model_builder, loader, device,
+                            layer: int = -1, max_batches: int = 16):
+    """Collect (attn, labels) per checkpoint. model_builder(cfg) -> nn.Module."""
+    out = []
+    for ckpt_path in checkpoints:
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        m = model_builder(ckpt["cfg"]).to(device)
+        m.load_state_dict(ckpt["model"])
+        out.append(collect_attention(m, loader, device, layer=layer, max_batches=max_batches))
+    return out
+
+
+def average_per_class_attention(per_class_dicts: list[dict]):
+    """Pixel-wise mean across a list of per-class attention dicts."""
+    keys = per_class_dicts[0].keys()
+    out = {}
+    for k in keys:
+        stack = np.stack([d[k] for d in per_class_dicts if k in d], axis=0)
+        out[k] = stack.mean(axis=0)
+    return out
+
+
 def plot_attention_heatmap(A: np.ndarray, title: str, out_path: str):
     """Render a single 12x12 attention heatmap."""
     import matplotlib.pyplot as plt

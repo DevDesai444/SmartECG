@@ -38,6 +38,18 @@ def per_lead_shap(model, background: torch.Tensor, samples: torch.Tensor,
     return out
 
 
+def per_lead_shap_multi(checkpoints, model_builder, background: torch.Tensor,
+                        samples: torch.Tensor, device, classes):
+    """Mean per-lead |SHAP| matrix across a list of checkpoints. Inputs held fixed."""
+    mats = []
+    for ckpt_path in checkpoints:
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        m = model_builder(ckpt["cfg"]).to(device).eval()
+        m.load_state_dict(ckpt["model"])
+        mats.append(per_lead_shap(m, background, samples, device, classes))
+    return np.stack(mats, axis=0).mean(axis=0)
+
+
 def plot_lead_importance(shap_mat: np.ndarray, classes, out_path: str):
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots(figsize=(8, 4))
